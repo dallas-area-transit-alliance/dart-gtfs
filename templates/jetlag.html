@@ -1,60 +1,127 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
     <head>
         <title>DART JLTG Hiding Location Finder</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
         <script text="text/javascript">
             $(function () {
-                $("#map-form").submit(function () {
-                    document.getElementById("map-iframe").contentWindow.document.open();
-                    var node = document.createElement("p");
-                    node.appendChild(document.createTextNode("Loading... (please don't click the button again!)"));
-                    document.getElementById("map-iframe").contentWindow.document.appendChild(node);
-                    document.getElementById("map-iframe").contentWindow.document.close();
+                $.getJSON('{{ url_for("static", filename="fonts.json") }}', function (fonts) {
+                    const font = fonts[Math.floor(Math.random() * fonts.length)];
+                    const link = document.createElement('link');
+                    link.rel = 'stylesheet';
+                    link.href = `https://fonts.googleapis.com/css2?family=${font}`;
+                    document.querySelector('head').appendChild(link);
+                    document.querySelector('h1').style.fontFamily = `"${font}"`;
+                });
+
+                $('#map-form').submit(function () {
+                    const submitButton = document.getElementById('submit');
+                    const loadingNote = document.getElementById('loading-note');
+                    const mapIframe = document.getElementById('map-iframe');
+
+                    submitButton.disabled = true;
+                    submitButton.innerText = 'Loading...';
+                    loadingNote.style.visibility = 'visible';
+                    mapIframe.contentDocument.body.replaceChildren();
+                    mapIframe.contentDocument.body.style.backgroundColor = 'rgba(255, 255, 255, 0)';
+
+                    const intervalId = setInterval(function () {
+                        if (mapIframe.contentDocument.body.childElementCount) {
+                            clearInterval(intervalId);
+                            submitButton.disabled = false;
+                            submitButton.innerText = 'Route me!';
+                            loadingNote.style.visibility = 'hidden';
+
+                            // set leaflet links to open in new tab
+                            for (const a of mapIframe.contentDocument.body.querySelectorAll('.leaflet-control-attribution a')) {
+                                a.rel = 'noreferrer noopener';
+                                a.target = '_blank';
+                            }
+                        }
+                    }, 1000);
                 });
             });
         </script>
         <style>
-            html, body {
-                height: 100%;
-                margin-top: 0;
-                margin-bottom: 0;
+            * {
+                margin: 0;
+                padding: 0;
+            }
+
+            body {
+                background-image: url('{{ url_for("static", filename="tile.png") }}');
+                background-size: 200px;
             }
 
             #content {
-                height: 100%;
                 display: flex;
                 flex-flow: column;
+            }
+
+            #map-form {
+                line-height: 1.5;
+            }
+
+            #submit {
+                padding: 5px;
+            }
+
+            #map-iframe {
+                height: calc(100vh - 30px);
+                padding: 15px;
+                border: none;
+            }
+
+            .shadow {
+                background-color: rgba(255, 255, 255, 0.9);
+                box-shadow: 5px 5px black;
+                padding: 15px;
+                margin: 0 20px 20px 15px;
+                width: fit-content;
+            }
+
+            h1.shadow {
+                margin-top: 15px;
+            }
+
+            .input {
+                padding: 3px;
+            }
+
+            .input[type='number'] {
+                width: 60px;
             }
         </style>
     </head>
     <body>
         <div id="content">
-            <div style="flex: 0 1 auto;">
-                <h1>DART Jet Lag: The Game - Hiding Location Finder</h1>
-                <form id="map-form" action="{{ url_for('jetlag_map') }}" target="map-iframe" method="post">
-                    <label for="start-time-picker">Choose a start time:</label>
-                    <input type="datetime-local" id="start-time-picker" name="start_time" min="{{start_date}}" max="{{end_date}}" value="{{now_time}}" required />
-                    <br />
-                    <label for="hide-duration">Hide duration (minutes):</label>
-                    <input type="number" id="hide-duration" name="hide_duration_minutes" min="0" max="100" value="45" required />
-                    <br />
-                    <label for="hiding-radius">Hiding radius (miles):</label>
-                    <input type="number" id="hiding-radius" name="hiding_radius" min="0" value="0.25" step="0.125" required />
-                    <br />
-                    <label for="start-stop-id">Starting stop:</label>
-                    <select id="start-stop-id" name="start_stop_id">
-                        {% for stop_id, stop_name in starting_stop_list %}<option value="{{stop_id}}">{{stop_name}}</option>{% endfor %}
-                    </select>
-                    <br />
-                    <label for="walking-speed">Walking speed:</label>
-                    <input type="number" id="walking-speed" name="walking_speed" value="1.06" min="0.01" step="0.01" required />
-                    <br />
-                    <button>Route me!</button>
-                </form>
-            </div>
-            <br />
-            <iframe name="map-iframe" id="map-iframe" style="flex: 1 1 auto; width: 100%; border: none;"></iframe>
+            <h1 class="shadow">DART Jet Lag: The Game - Hiding Location Finder</h1>
+            <div class="shadow">Background by dart157!</div>
+            <form class="shadow" id="map-form" action="{{ url_for('jetlag_map') }}" target="map-iframe" method="post">
+                <label for="start-time-picker">Choose a start time:</label>
+                <input type="datetime-local" id="start-time-picker" name="start_time" min="{{start_date}}" max="{{end_date}}" value="{{now_time}}" required />
+                <br />
+                <label for="hide-duration">Hide duration (minutes):</label>
+                <input type="number" class="input" id="hide-duration" name="hide_duration_minutes" min="0" max="100" value="45" required />
+                <br />
+                <label for="hiding-radius">Hiding radius (miles):</label>
+                <input type="number" class="input" id="hiding-radius" name="hiding_radius" min="0" value="0.25" step="0.125" required />
+                <br />
+                <label for="start-stop-id">Starting stop:</label>
+                <select class="input" id="start-stop-id" name="start_stop_id">
+                    {% for stop_id, stop_name in starting_stop_list %}
+                    <option value="{{stop_id}}">{{stop_name}}</option>
+                    {% endfor %}
+                </select>
+                <br />
+                <label for="walking-speed">Walking speed (m/s):</label>
+                <input type="number" class="input" id="walking-speed" name="walking_speed" value="1.06" min="0.01" step="0.01" required />
+                <br />
+                <button type="submit" id="submit">Route me!</button>
+                <span id="loading-note" style="visibility: hidden">(this takes a while, don't refresh!)</span>
+            </form>
+            <iframe name="map-iframe" id="map-iframe"></iframe>
         </div>
     </body>
 </html>
