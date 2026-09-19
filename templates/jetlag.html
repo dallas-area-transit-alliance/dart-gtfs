@@ -1,127 +1,163 @@
 <!doctype html>
-<html>
-    <head>
-        <title>DART JLTG Hiding Location Finder</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
-        <script text="text/javascript">
-            $(function () {
-                $.getJSON('{{ url_for("static", filename="fonts.json") }}', function (fonts) {
-                    const font = fonts[Math.floor(Math.random() * fonts.length)];
-                    const link = document.createElement('link');
-                    link.rel = 'stylesheet';
-                    link.href = `https://fonts.googleapis.com/css2?family=${font}`;
-                    document.querySelector('head').appendChild(link);
-                    document.querySelector('h1').style.fontFamily = `"${font}"`;
-                });
-
-                $('#map-form').submit(function () {
-                    const submitButton = document.getElementById('submit');
-                    const loadingNote = document.getElementById('loading-note');
-                    const mapIframe = document.getElementById('map-iframe');
-
-                    submitButton.disabled = true;
-                    submitButton.innerText = 'Loading...';
-                    loadingNote.style.visibility = 'visible';
-                    mapIframe.contentDocument.body.replaceChildren();
-                    mapIframe.contentDocument.body.style.backgroundColor = 'rgba(255, 255, 255, 0)';
-
-                    const intervalId = setInterval(function () {
-                        if (mapIframe.contentDocument.body.childElementCount) {
-                            clearInterval(intervalId);
-                            submitButton.disabled = false;
-                            submitButton.innerText = 'Route me!';
-                            loadingNote.style.visibility = 'hidden';
-
-                            // set leaflet links to open in new tab
-                            for (const a of mapIframe.contentDocument.body.querySelectorAll('.leaflet-control-attribution a')) {
-                                a.rel = 'noreferrer noopener';
-                                a.target = '_blank';
-                            }
-                        }
-                    }, 1000);
-                });
-            });
-        </script>
-        <style>
-            * {
-                margin: 0;
-                padding: 0;
-            }
-
-            body {
-                background-image: url('{{ url_for("static", filename="tile.png") }}');
-                background-size: 200px;
-            }
-
-            #content {
-                display: flex;
-                flex-flow: column;
-            }
-
-            #map-form {
-                line-height: 1.5;
-            }
-
-            #submit {
-                padding: 5px;
-            }
-
-            #map-iframe {
-                height: calc(100vh - 30px);
-                padding: 15px;
-                border: none;
-            }
-
-            .shadow {
-                background-color: rgba(255, 255, 255, 0.9);
-                box-shadow: 5px 5px black;
-                padding: 15px;
-                margin: 0 20px 20px 15px;
-                width: fit-content;
-            }
-
-            h1.shadow {
-                margin-top: 15px;
-            }
-
-            .input {
-                padding: 3px;
-            }
-
-            .input[type='number'] {
-                width: 60px;
-            }
-        </style>
-    </head>
-    <body>
-        <div id="content">
-            <h1 class="shadow">DART Jet Lag: The Game - Hiding Location Finder</h1>
-            <div class="shadow">Background by dart157!</div>
-            <form class="shadow" id="map-form" action="{{ url_for('jetlag_map') }}" target="map-iframe" method="post">
-                <label for="start-time-picker">Choose a start time:</label>
-                <input type="datetime-local" id="start-time-picker" name="start_time" min="{{start_date}}" max="{{end_date}}" value="{{now_time}}" required />
-                <br />
-                <label for="hide-duration">Hide duration (minutes):</label>
-                <input type="number" class="input" id="hide-duration" name="hide_duration_minutes" min="0" max="100" value="45" required />
-                <br />
-                <label for="hiding-radius">Hiding radius (miles):</label>
-                <input type="number" class="input" id="hiding-radius" name="hiding_radius" min="0" value="0.25" step="0.125" required />
-                <br />
-                <label for="start-stop-id">Starting stop:</label>
-                <select class="input" id="start-stop-id" name="start_stop_id">
-                    {% for stop_id, stop_name in starting_stop_list %}
-                    <option value="{{stop_id}}">{{stop_name}}</option>
-                    {% endfor %}
-                </select>
-                <br />
-                <label for="walking-speed">Walking speed (m/s):</label>
-                <input type="number" class="input" id="walking-speed" name="walking_speed" value="1.06" min="0.01" step="0.01" required />
-                <br />
-                <button type="submit" id="submit">Route me!</button>
-                <span id="loading-note" style="visibility: hidden">(this takes a while, don't refresh!)</span>
-            </form>
-            <iframe name="map-iframe" id="map-iframe"></iframe>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>DART Jet Lag Hiding Spot Finder</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
+</head>
+<body>
+    <header class="app-header">
+        <div class="app-header__title">
+            <span class="app-header__icon" aria-hidden="true">🚈</span>
+            <div>
+                <h1>DART Jet Lag Hiding Spot Finder</h1>
+                <p class="app-header__subtitle">Find every stop you can reach — and where you can legally hide — before time runs out.</p>
+            </div>
         </div>
-    </body>
+        <button type="button" id="panel-toggle" class="panel-toggle" aria-expanded="true" aria-controls="control-panel">
+            <span class="panel-toggle__label">Hide options</span>
+            <span class="panel-toggle__chevron" aria-hidden="true">▾</span>
+        </button>
+    </header>
+
+    <div class="app-layout">
+        <aside id="control-panel" class="control-panel">
+            <form id="map-form" action="{{ url_for('jetlag_map') }}" method="post">
+                <div class="field">
+                    <label for="start-time-picker">Start time</label>
+                    <input
+                        type="datetime-local"
+                        id="start-time-picker"
+                        name="start_time"
+                        min="{{ start_date }}"
+                        max="{{ end_date }}"
+                        value="{{ now_time }}"
+                        required
+                    />
+                </div>
+
+                <div class="field">
+                    <label for="start-stop-id">Starting stop</label>
+                    <select id="start-stop-id" name="start_stop_id">
+                        {% for stop_id, stop_name in starting_stop_list %}
+                        <option value="{{ stop_id }}" {% if stop_id|string == default_start_stop %}selected{% endif %}>{{ stop_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="field-row">
+                    <div class="field">
+                        <label for="hide-duration">Hide duration (min)</label>
+                        <input
+                            type="number"
+                            id="hide-duration"
+                            name="hide_duration_minutes"
+                            min="1"
+                            max="180"
+                            value="{{ default_hide_duration }}"
+                            required
+                        />
+                    </div>
+                    <div class="field">
+                        <label for="hiding-radius">Hiding radius (mi)</label>
+                        <input
+                            type="number"
+                            id="hiding-radius"
+                            name="hiding_radius"
+                            min="0"
+                            step="0.125"
+                            value="{{ default_hiding_radius }}"
+                            required
+                        />
+                    </div>
+                </div>
+
+                <div class="field">
+                    <label for="walking-speed">Walking speed (m/s)</label>
+                    <input
+                        type="number"
+                        id="walking-speed"
+                        name="walking_speed"
+                        min="0.01"
+                        step="0.01"
+                        value="{{ default_walking_speed }}"
+                        required
+                    />
+                </div>
+
+                <details class="advanced">
+                    <summary>Advanced options</summary>
+                    <fieldset>
+                        <legend>Modes you can travel on</legend>
+                        {% for rt in route_types %}
+                        <label class="checkbox">
+                            <input
+                                type="checkbox"
+                                name="travel_mode_option"
+                                value="{{ rt }}"
+                                {% if rt in default_travel_modes.split(',') %}checked{% endif %}
+                            />
+                            {{ rt.replace('_', ' ').title() }}
+                        </label>
+                        {% endfor %}
+                    </fieldset>
+                    <fieldset>
+                        <legend>Modes that count as hiding spots</legend>
+                        {% for rt in route_types %}
+                        <label class="checkbox">
+                            <input
+                                type="checkbox"
+                                name="hiding_mode_option"
+                                value="{{ rt }}"
+                                {% if rt in default_hiding_modes.split(',') %}checked{% endif %}
+                            />
+                            {{ rt.replace('_', ' ').title() }}
+                        </label>
+                        {% endfor %}
+                    </fieldset>
+                </details>
+
+                <div id="error-banner" class="error-banner" role="alert" hidden></div>
+
+                <button type="submit" id="submit-btn" class="btn-primary">
+                    <span class="btn-label">Find hiding spots</span>
+                </button>
+            </form>
+        </aside>
+
+        <main class="map-area">
+            <div id="map" class="map" data-center="[32.7767, -96.7970]"></div>
+
+            <div id="map-loading" class="map-loading" hidden>
+                <div class="spinner" aria-hidden="true"></div>
+                <span>Crunching the schedule… this can take a bit.</span>
+            </div>
+
+            <div id="result-summary" class="result-summary" hidden></div>
+
+            <div class="legend">
+                <span class="legend__item"><i class="legend__dot legend__dot--hiding"></i> Valid hiding spot</span>
+                <span class="legend__item"><i class="legend__dot legend__dot--reachable"></i> Reachable stop</span>
+            </div>
+
+            <div id="stop-drawer" class="stop-drawer">
+                <div class="stop-drawer__header">
+                    <h2 id="drawer-title"></h2>
+                    <button type="button" id="drawer-close" aria-label="Close">&times;</button>
+                </div>
+                <ol id="drawer-steps" class="stop-drawer__steps"></ol>
+            </div>
+        </main>
+    </div>
+
+    <footer class="app-footer">
+        Made with &hearts; by <a href="https://github.com/democat3457" target="_blank" rel="noreferrer noopener">Colin Wong</a>.
+        Data from <a href="https://www.dart.org/transitdata/latest/google_transit.zip" target="_blank" rel="noreferrer noopener">DART GTFS</a>.
+    </footer>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+</body>
 </html>

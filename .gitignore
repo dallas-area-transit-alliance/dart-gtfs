@@ -8,3 +8,4 @@ profile*.json
 /*.html
 .vercel
 .vscode/
+.claude

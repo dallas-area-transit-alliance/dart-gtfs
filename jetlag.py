@@ -11,7 +11,6 @@ import shapely
 from tqdm import tqdm
 from gtfslib import GTFS, CoordsUtil, Projections, RouteType
 from pathlib import Path
-import folium
 from datetime import datetime, timedelta, date, time
 import time as pytime
 
@@ -19,7 +18,7 @@ import requests
 import shutil
 
 
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
 app = Flask(__name__)
 
 
@@ -168,6 +167,35 @@ class RouteSegmentCollection:
                 )
         return sep.join(route_text)
 
+    def to_steps(self) -> list[dict]:
+        """JSON-friendly version of to_str: a list of step dicts describing
+        each leg of the route, for rendering in the frontend's stop details
+        drawer instead of a pre-rendered HTML popup string."""
+        first = self.trips[0]
+        steps = [{
+            "type": "start",
+            "label": "Start",
+            "stop_name": gtfs.stop_names[str(first.arrival_stop_id)],
+            "time": timeish_hms_colon_str(first.departure_td),
+        }]
+        for segment in self.trips[1:]:
+            route_str = segment.route_name
+            if route_str.startswith("Walk "):
+                seg_type = "walk"
+            elif route_str.startswith("Wait "):
+                seg_type = "wait"
+            else:
+                seg_type = "transit"
+            steps.append({
+                "type": seg_type,
+                "label": route_str,
+                "stop_name": gtfs.stop_names[str(segment.arrival_stop_id)],
+                "departure_time": timeish_hms_colon_str(segment.departure_td),
+                "arrival_time": timeish_hms_colon_str(segment.arrival_td),
+                "duration": timeish_minsec_str(segment.arrival_td - segment.departure_td),
+            })
+        return steps
+
     @classmethod
     def starting_collection(cls, start_dt: datetime, start_stop_id: StopId):
         td = timedelta_coerce(start_dt.time())
@@ -289,29 +317,43 @@ def index():
                            starting_stop_list=get_starting_stops(),
                            now_time=dt_now.isoformat(),
                            start_date=dt_start.isoformat(),
-                           end_date=dt_end.isoformat())
+                           end_date=dt_end.isoformat(),
+                           route_types=[rt.name for rt in RouteType.all()],
+                           default_travel_modes=_default_allowed_travel_modes,
+                           default_hiding_modes=_default_allowed_hiding_modes,
+                           default_hide_duration=DEFAULT_HIDE_DURATION.seconds // 60,
+                           default_hiding_radius=DEFAULT_HIDING_RADIUS,
+                           default_walking_speed=DEFAULT_WALKING_SPEED,
+                           default_start_stop=str(DEFAULT_START_STOP))
 
 
 @app.route("/jetlag-map", methods=['POST'])
 def jetlag_map():
     data = request.form
-    START_TIME = datetime.fromisoformat(data.get('start_time', DEFAULT_START_TIME.isoformat()))
-    _hide_duration = int(data.get('hide_duration_minutes', DEFAULT_HIDE_DURATION.seconds // 60))
-    _end_time = data.get('end_time', None)
-    END_TIME = datetime.fromisoformat(_end_time) if _end_time else START_TIME + timedelta(minutes=_hide_duration)
-    START_STOP = data.get('start_stop_id', DEFAULT_START_STOP)
-    HIDING_RADIUS = float(data.get('hiding_radius', DEFAULT_HIDING_RADIUS))
-    WALKING_SPEED = float(data.get('walking_speed', DEFAULT_WALKING_SPEED))
-    ALLOWED_TRAVEL_MODES = [ RouteType[route_type] for route_type in data.get('travel_modes', _default_allowed_travel_modes).split(',') ]
-    ALLOWED_HIDING_MODES = [ RouteType[route_type] for route_type in data.get('hiding_modes', _default_allowed_hiding_modes).split(',') ]
-    ALLOWED_HIDING_ROUTES = data.get('hiding_routes', _default_allowed_hiding_routes).split(',')
+    try:
+        START_TIME = datetime.fromisoformat(data.get('start_time', DEFAULT_START_TIME.isoformat()))
+        _hide_duration = int(data.get('hide_duration_minutes', DEFAULT_HIDE_DURATION.seconds // 60))
+        _end_time = data.get('end_time', None)
+        END_TIME = datetime.fromisoformat(_end_time) if _end_time else START_TIME + timedelta(minutes=_hide_duration)
+        START_STOP = data.get('start_stop_id', DEFAULT_START_STOP)
+        HIDING_RADIUS = float(data.get('hiding_radius', DEFAULT_HIDING_RADIUS))
+        WALKING_SPEED = float(data.get('walking_speed', DEFAULT_WALKING_SPEED))
+        ALLOWED_TRAVEL_MODES = [ RouteType[route_type] for route_type in data.get('travel_modes', _default_allowed_travel_modes).split(',') if route_type ]
+        ALLOWED_HIDING_MODES = [ RouteType[route_type] for route_type in data.get('hiding_modes', _default_allowed_hiding_modes).split(',') if route_type ]
+        ALLOWED_HIDING_ROUTES = [r for r in data.get('hiding_routes', _default_allowed_hiding_routes).split(',') if r]
+        if not ALLOWED_TRAVEL_MODES:
+            ALLOWED_TRAVEL_MODES = [ RouteType[route_type] for route_type in _default_allowed_travel_modes.split(',') ]
+        if not ALLOWED_HIDING_MODES:
+            ALLOWED_HIDING_MODES = [ RouteType[route_type] for route_type in _default_allowed_hiding_modes.split(',') ]
+    except (ValueError, KeyError) as e:
+        return jsonify({"error": f"Invalid search parameters: {e}"}), 400
 
     if not (gtfs.start_date <= START_TIME.date() <= gtfs.end_date):
-        return "<strong>Start time not in GTFS feed range!</strong>"
+        return jsonify({"error": "Start time is outside the available GTFS schedule range."}), 400
     if not (gtfs.start_date <= END_TIME.date() <= gtfs.end_date):
-        return "<strong>End time not in GTFS feed range!</strong>"
-    if not (gtfs.start_date < gtfs.end_date):
-        return "<strong>End time must be after start time!</strong>"
+        return jsonify({"error": "End time is outside the available GTFS schedule range."}), 400
+    if not (START_TIME < END_TIME):
+        return jsonify({"error": "End time must be after start time."}), 400
 
     print(data)
     print(START_TIME, END_TIME, START_STOP, WALKING_SPEED)
@@ -398,11 +440,7 @@ def jetlag_map():
 
     print(f'Evaluated {len(visited_trips)} trips and found {len(visited_stops)} reachable stops.')
 
-    # import pprint
-    # pprint.pprint(visited_stops)
-
-    m = folium.Map(location=[32.7769, -96.7972], zoom_start=10)
-
+    stops_json = []
     for stop_id, route_collection in visited_stops.items():
         stop = gtfs.get_stop(stop_id).to_crs(Projections.WGS84).iloc[0]
         name, point = stop["stop_name"], stop.geometry
@@ -412,21 +450,21 @@ def jetlag_map():
             for r_id in gtfs.stop_routes[stop_id]
         ) # TODO: create function
 
-        popup = folium.Popup(
-            route_collection.populate_waiting().to_str(sep='<br>'),
-            max_width=300
-        )
+        arrival_dt = route_collection.get_arrival_dt()
+        stops_json.append({
+            "stop_id": str(stop_id),
+            "name": name,
+            "lat": lat,
+            "lon": lon,
+            "is_hiding_spot": is_valid_hiding_spot,
+            "hiding_radius_m": (1609.344 * HIDING_RADIUS) if is_valid_hiding_spot else 20,
+            "arrival_time": arrival_dt.strftime("%H:%M:%S") if arrival_dt else None,
+            "steps": route_collection.populate_waiting().to_steps(),
+        })
 
-        folium.Circle(
-            location=[lat, lon],
-            tooltip=name,
-            popup=popup,
-            fill_color="#00f" if is_valid_hiding_spot else "#f00",
-            fill_opacity=0.2,
-            color="black",
-            weight=1,
-            radius=1609.344 * HIDING_RADIUS if is_valid_hiding_spot else 20,
-        ).add_to(m)
-
-    html = m.get_root().render()
-    return html
+    return jsonify({
+        "center": [32.7769, -96.7972],
+        "stop_count": len(stops_json),
+        "hiding_spot_count": sum(1 for s in stops_json if s["is_hiding_spot"]),
+        "stops": stops_json,
+    })
